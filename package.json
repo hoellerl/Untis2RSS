@@ -2,10 +2,12 @@
   "name": "untis2rss",
   "version": "1.0.0",
   "description": "Untis to RSS feed",
-  "main": "main.ts",
+  "main": "main.js",
   "type": "module",
   "scripts": {
-    "dev": "node --loader ts-node/esm main.ts"
+    "dev": "node --loader ts-node/esm main.ts",
+    "build": "tsc",
+    "start": "node main.js"
   },
   "author": "",
   "license": "ISC",

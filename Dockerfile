@@ -1,8 +1,11 @@
 FROM node:22-slim
 WORKDIR /usr/src/app
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci
 COPY . .
+RUN npm run build
+# remove devDependencies to keep the image small
+RUN npm prune --production
 
 VOLUME /usr/src/app/data
 EXPOSE 6565

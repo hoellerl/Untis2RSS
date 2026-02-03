@@ -1,6 +1,7 @@
 import http from 'http';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { WebUntis } from 'webuntis';
 import crypto from 'crypto';
 import { config } from 'dotenv';
@@ -8,13 +9,16 @@ import {Feed} from 'feed';
 
 config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const UPDATE_INTERVAL: number = 3600 * 1000; // 1 hour in milliseconds
 const PORT: number = 6565;
 const DATA_DIR: string = 'data';
 const RSS_PATH: string = path.join(DATA_DIR, 'feed.xml');
 const STATE_FILE: string = path.join(DATA_DIR, 'state.json');
 const TIMETABLE_CACHE_FILE: string = path.join(DATA_DIR, 'timetable_cache.json');
-const FAVICON_PATH: string = 'favicon.ico';
+const FAVICON_PATH: string = 'favicon.svg';
 
 interface State {
     seen: string[];
@@ -398,7 +402,7 @@ const startServer = (): void => {
         } else if (req.url === `/${FAVICON_PATH}`) {
             try {
                 const favicon = await fs.readFile(path.join(__dirname, FAVICON_PATH));
-                res.writeHead(200, { 'Content-Type': 'image/x-icon' });
+                res.writeHead(200, { 'Content-Type': 'image/svg+xml' });
                 res.end(favicon);
             } catch (error) {
                 res.writeHead(404);
