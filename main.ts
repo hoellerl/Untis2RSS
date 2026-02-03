@@ -4,7 +4,7 @@ import path from 'path';
 import { WebUntis } from 'webuntis';
 import crypto from 'crypto';
 import { config } from 'dotenv';
-import { Feed } from 'feed';
+import {Feed} from 'feed';
 
 config();
 
@@ -73,12 +73,12 @@ interface TimetableCache {
     [key: string]: PeriodEntry;
 }
 
-const loadTimetableCache = async (): Promise<TimetableCache> => {
+const loadTimetableCache = async (): Promise<TimetableCache | null> => {
     try {
         const data = await fs.readFile(TIMETABLE_CACHE_FILE, 'utf8');
         return JSON.parse(data);
     } catch (error) {
-        return {};
+        return null;
     }
 };
 
@@ -199,64 +199,92 @@ const fetchAndGenerateFeed = async (): Promise<void> => {
                 acc[period.id] = periodToEntry(period);
                 return acc;
             }, {});
+            
             const oldCache = await loadTimetableCache();
-            const changes = diffTimetables(oldCache, newCache);
 
-            for (const change of changes) {
-                const entry = change.new || change.old;
-                if (!entry) continue;
-                const uidContent = { type: change.type, id: entry.id, data: change.new || change.old };
-                const uid = generateUID(uidContent);
-
-                if (!state.seen.includes(uid)) {
-                    let title = "Timetable Change";
-                    let description = "";
-
-                    if (change.type === 'added' && change.new?.code === 'irregular') {
-                        title = `🗓️ Event: ${change.new.lstext || 'Irregular Event'}`;
-                        description = `An event has been added on ${entry.date} from ${entry.startTime} to ${entry.endTime}.`;
+            if (oldCache === null) {
+                console.log("First run detected. Initializing timetable cache without notifications.");
+                await saveTimetableCache(newCache);
+            } else {
+                const changes = diffTimetables(oldCache, newCache);
+                
+                // Calculate the max date present in the OLD cache to detect window expansion
+                let oldMaxDateStr = "";
+                for (const key in oldCache) {
+                    if (oldCache[key].date > oldMaxDateStr) {
+                        oldMaxDateStr = oldCache[key].date;
                     }
-                    else if (change.type === 'updated') {
-                        // Cancellation
-                        if (change.new?.code === 'cancelled' && change.old?.code !== 'cancelled') {
-                            title = `❌ Lesson Cancelled: ${entry.subjects.join(', ')}`;
-                            description = `The lesson ${entry.subjects.join(', ')} at ${entry.startTime} on ${entry.date} has been cancelled.`;
-                        }
-                        // Substitution
-                        else if (change.new?.originalTeacher && !change.old?.originalTeacher) {
-                            const newTeacher = change.new.teachers[0];
-                            title = `🔄 Substitution: ${entry.subjects.join(', ')}`;
-                            description = `For ${entry.subjects.join(', ')} at ${entry.startTime}, ${newTeacher} is substituting for ${change.new.originalTeacher}.`;
-                        }
-                        // Irregular Event Update
-                        else if (change.new?.code === 'irregular') {
-                            title = `🗓️ Event Update: ${change.new.lstext || 'Irregular Event'}`;
-                            description = `An event on ${entry.date} has been updated.`;
-                        }
-                        // Other updates
-                        else {
-                             title = `Lesson Updated: ${entry.subjects.join(', ')} on ${entry.date}`;
-                             description = `A lesson at ${entry.startTime} has been updated.`;
-                        }
-                    } else if (change.type === 'added') {
-                        title = `New Lesson: ${entry.subjects.join(', ')} on ${entry.date}`;
-                        description = `A new lesson has been added at ${entry.startTime}.`;
-                    } else if (change.type === 'removed') {
-                        title = `Lesson Removed: ${entry.subjects.join(', ')} on ${entry.date}`;
-                        description = `A lesson has been removed at ${entry.startTime}.`;
-                    }
-
-                    feed.addItem({
-                        title,
-                        id: uid,
-                        link: '',
-                        description,
-                        date: new Date(),
-                    });
-                    state.seen.push(uid);
                 }
+                
+                const todayStr = today.toISOString().split('T')[0];
+
+                for (const change of changes) {
+                    const entry = change.new || change.old;
+                    if (!entry) continue;
+
+                    // Filter out changes due to sliding window
+                    if (change.type === 'removed' && change.old && change.old.date < todayStr) {
+                        // Lesson fell out of the start of the window
+                        continue;
+                    }
+                    if (change.type === 'added' && change.new && oldMaxDateStr && change.new.date > oldMaxDateStr) {
+                        // Lesson entered the end of the window
+                        continue;
+                    }
+
+                    const uidContent = { type: change.type, id: entry.id, data: change.new || change.old };
+                    const uid = generateUID(uidContent);
+
+                    if (!state.seen.includes(uid)) {
+                        let title = "Timetable Change";
+                        let description = "";
+
+                        if (change.type === 'added' && change.new?.code === 'irregular') {
+                            title = `🗓️ Event: ${change.new.lstext || 'Irregular Event'}`;
+                            description = `An event has been added on ${entry.date} from ${entry.startTime} to ${entry.endTime}.`;
+                        }
+                        else if (change.type === 'updated') {
+                            // Cancellation
+                            if (change.new?.code === 'cancelled' && change.old?.code !== 'cancelled') {
+                                title = `❌ Lesson Cancelled: ${entry.subjects.join(', ')}`;
+                                description = `The lesson ${entry.subjects.join(', ')} at ${entry.startTime} on ${entry.date} has been cancelled.`;
+                            }
+                            // Substitution
+                            else if (change.new?.originalTeacher && !change.old?.originalTeacher) {
+                                const newTeacher = change.new.teachers[0];
+                                title = `🔄 Substitution: ${entry.subjects.join(', ')}`;
+                                description = `For ${entry.subjects.join(', ')} at ${entry.startTime}, ${newTeacher} is substituting for ${change.new.originalTeacher}.`;
+                            }
+                            // Irregular Event Update
+                            else if (change.new?.code === 'irregular') {
+                                title = `🗓️ Event Update: ${change.new.lstext || 'Irregular Event'}`;
+                                description = `An event on ${entry.date} has been updated.`;
+                            }
+                            // Other updates
+                            else {
+                                 title = `Lesson Updated: ${entry.subjects.join(', ')} on ${entry.date}`;
+                                 description = `A lesson at ${entry.startTime} has been updated.`;
+                            }
+                        } else if (change.type === 'added') {
+                            title = `New Lesson: ${entry.subjects.join(', ')} on ${entry.date}`;
+                            description = `A new lesson has been added at ${entry.startTime}.`;
+                        } else if (change.type === 'removed') {
+                            title = `Lesson Removed: ${entry.subjects.join(', ')} on ${entry.date}`;
+                            description = `A lesson has been removed at ${entry.startTime}.`;
+                        }
+
+                        feed.addItem({
+                            title,
+                            id: uid,
+                            link: '',
+                            description,
+                            date: new Date(),
+                        });
+                        state.seen.push(uid);
+                    }
+                }
+                await saveTimetableCache(newCache);
             }
-            await saveTimetableCache(newCache);
         } catch (e: any) {
             console.error(`Timetable sync error: ${e.message}`);
         }
@@ -266,7 +294,15 @@ const fetchAndGenerateFeed = async (): Promise<void> => {
         try {
             const exams = await untis.getExamsForRange(schoolYearStart, schoolYearEnd);
             for (const exam of exams) {
-                const uid = generateUID({ type: 'exam', id: exam.id });
+                // Use a composite key because exam.id is always 0
+                const uidContent = { 
+                    type: 'exam', 
+                    date: exam.examDate, 
+                    subject: exam.subject, 
+                    startTime: exam.startTime 
+                };
+                const uid = generateUID(uidContent);
+                
                 if (!state.seen.includes(uid)) {
                     const examDate = WebUntis.convertUntisDate(String(exam.examDate));
                     const description = `Subject: ${exam.subject} | Teacher: ${exam.teachers.join(', ')} | Room: ${exam.rooms.join(', ')}`;
@@ -275,7 +311,7 @@ const fetchAndGenerateFeed = async (): Promise<void> => {
                         id: uid,
                         link: '',
                         description,
-                        date: examDate,
+                        date: new Date(),
                     });
                     state.seen.push(uid);
                 }
@@ -307,7 +343,7 @@ const fetchAndGenerateFeed = async (): Promise<void> => {
                         id: uid,
                         link: '',
                         description,
-                        date: new Date(absence.lastUpdate),
+                        date: new Date(),
                     });
                     state.seen.push(uid);
                 }
@@ -368,6 +404,9 @@ const startServer = (): void => {
                 res.writeHead(404);
                 res.end('Favicon not found.');
             }
+        } else if (req.url === '/health') {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end('OK');
         }
         else {
             res.writeHead(404);

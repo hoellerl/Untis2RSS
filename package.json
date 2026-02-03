@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "Untis to RSS feed",
   "main": "main.ts",
+  "type": "module",
   "scripts": {
-    "start": "node main.js",
-    "test": "node test.js"
+    "dev": "node --loader ts-node/esm main.ts"
   },
   "author": "",
   "license": "ISC",
