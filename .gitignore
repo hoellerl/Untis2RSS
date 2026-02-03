@@ -1,5 +1,6 @@
 .idea
 .env
+dist
 example_outputs
 node-js-untis-docs
 py-archive
