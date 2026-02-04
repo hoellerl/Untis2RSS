@@ -1,9 +1,9 @@
 import { promises as fs } from 'fs';
 import { config } from './config.js';
-import { State, TimetableCache } from './types.js';
+import { State, TimetableCache, FeedItem } from './types.js';
 
 export class Store {
-    private state: State = { seen: [] };
+    private state: State = { seen: [], history: [] };
 
     async init(): Promise<void> {
         try {
@@ -21,10 +21,13 @@ export class Store {
             if (!Array.isArray(this.state.seen)) {
                 this.state.seen = [];
             }
+            if (!Array.isArray(this.state.history)) {
+                this.state.history = [];
+            }
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
                 console.log('No state file found, starting fresh.');
-                this.state = { seen: [] };
+                this.state = { seen: [], history: [] };
             } else {
                 console.error('Error loading state:', error);
             }
@@ -45,6 +48,22 @@ export class Store {
 
     markSeen(uid: string): void {
         this.state.seen.push(uid);
+    }
+
+    addToHistory(item: FeedItem): void {
+        this.state.history.push(item);
+    }
+
+    getHistory(): FeedItem[] {
+        return this.state.history;
+    }
+
+    pruneHistory(maxAgeMs: number): void {
+        const now = new Date().getTime();
+        this.state.history = this.state.history.filter(item => {
+            const itemTime = new Date(item.date).getTime();
+            return (now - itemTime) < maxAgeMs;
+        });
     }
 
     async loadTimetableCache(): Promise<TimetableCache | null> {

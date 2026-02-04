@@ -4,7 +4,7 @@ import { config } from './config.js';
 import { Store } from './store.js';
 import { UntisManager } from './untis-manager.js';
 import { generateHash } from './helpers.js';
-import { Change, PeriodEntry, TimetableCache, UntisPeriod } from './types.js';
+import { Change, PeriodEntry, TimetableCache, UntisPeriod, FeedItem } from './types.js';
 
 export class FeedGenerator {
     private store: Store;
@@ -43,20 +43,37 @@ export class FeedGenerator {
         const schoolYearEnd = new Date(schoolYear.endDate);
 
         if (config.notifyTimetable) {
-            await this.processTimetable(feed, today);
+            await this.processTimetable(today);
         }
 
         if (config.notifyExams) {
-            await this.processExams(feed, schoolYearStart, schoolYearEnd);
+            await this.processExams(schoolYearStart, schoolYearEnd);
         }
 
         if (config.notifyAbsences) {
-            await this.processAbsences(feed, schoolYearStart, schoolYearEnd);
+            await this.processAbsences(schoolYearStart, schoolYearEnd);
         }
 
         if (config.notifyMessages) {
-            await this.processMessages(feed, today);
+            await this.processMessages(today);
         }
+
+        // Add history items to feed (sorted by date descending)
+        const history = this.store.getHistory();
+        history.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        for (const item of history) {
+            feed.addItem({
+                title: item.title,
+                id: item.id,
+                link: item.link,
+                description: item.description,
+                date: new Date(item.date)
+            });
+        }
+
+        // Prune history older than 7 days (604800000 ms)
+        this.store.pruneHistory(7 * 24 * 60 * 60 * 1000);
 
         await fs.writeFile(config.rssPath, feed.rss2());
         await this.store.saveState();
@@ -65,7 +82,14 @@ export class FeedGenerator {
         await this.untisManager.logout();
     }
 
-    private async processTimetable(feed: Feed, today: Date) {
+    private formatDate(date: Date): string {
+        const d = date.getDate().toString().padStart(2, '0');
+        const m = (date.getMonth() + 1).toString().padStart(2, '0');
+        const y = date.getFullYear();
+        return `${d}/${m}/${y}`;
+    }
+
+    private async processTimetable(today: Date) {
         try {
             const lookahead = new Date();
             lookahead.setDate(today.getDate() + 14);
@@ -103,7 +127,7 @@ export class FeedGenerator {
                     const uid = generateHash(uidContent);
 
                     if (!this.store.isSeen(uid)) {
-                        this.addTimetableItem(feed, change, entry, uid);
+                        this.addTimetableItem(change, entry, uid);
                         this.store.markSeen(uid);
                     }
                 }
@@ -114,40 +138,43 @@ export class FeedGenerator {
         }
     }
 
-    private addTimetableItem(feed: Feed, change: Change, entry: PeriodEntry, uid: string) {
+    private addTimetableItem(change: Change, entry: PeriodEntry, uid: string) {
         let title = "Timetable Change";
         let description = "";
+        const entryDate = new Date(entry.date);
+        const formattedDate = this.formatDate(entryDate);
 
         if (change.type === 'added' && change.new?.code === 'irregular') {
             title = `🗓️ Event: ${change.new.lstext || 'Irregular Event'}`;
-            description = `An event has been added on ${entry.date} from ${entry.startTime} to ${entry.endTime}.`;
+            description = `An event has been added on ${formattedDate} from ${entry.startTime} to ${entry.endTime}.`;
         } else if (change.type === 'updated') {
             if (change.new?.code === 'cancelled' && change.old?.code !== 'cancelled') {
                 title = `❌ Lesson Cancelled: ${entry.subjects.join(', ')}`;
-                description = `The lesson ${entry.subjects.join(', ')} at ${entry.startTime} on ${entry.date} has been cancelled.`;
+                description = `The lesson ${entry.subjects.join(', ')} at ${entry.startTime} on ${formattedDate} has been cancelled.`;
             } else if (change.new?.originalTeacher && !change.old?.originalTeacher) {
                 const newTeacher = change.new.teachers[0];
                 title = `🔄 Substitution: ${entry.subjects.join(', ')}`;
                 description = `For ${entry.subjects.join(', ')} at ${entry.startTime}, ${newTeacher} is substituting for ${change.new.originalTeacher}.`;
             } else if (change.new?.code === 'irregular') {
                 title = `🗓️ Event Update: ${change.new.lstext || 'Irregular Event'}`;
-                description = `An event on ${entry.date} has been updated.`;
+                description = `An event on ${formattedDate} has been updated.`;
             } else {
-                title = `Lesson Updated: ${entry.subjects.join(', ')} on ${entry.date}`;
+                title = `Lesson Updated: ${entry.subjects.join(', ')} on ${formattedDate}`;
                 description = `A lesson at ${entry.startTime} has been updated.`;
             }
         } else if (change.type === 'added') {
-            title = `New Lesson: ${entry.subjects.join(', ')} on ${entry.date}`;
+            title = `New Lesson: ${entry.subjects.join(', ')} on ${formattedDate}`;
             description = `A new lesson has been added at ${entry.startTime}.`;
         } else if (change.type === 'removed') {
-            title = `Lesson Removed: ${entry.subjects.join(', ')} on ${entry.date}`;
+            title = `Lesson Removed: ${entry.subjects.join(', ')} on ${formattedDate}`;
             description = `A lesson has been removed at ${entry.startTime}.`;
         }
 
-        feed.addItem({ title, id: uid, link: '', description, date: new Date() });
+        const item: FeedItem = { title, id: uid, link: '', description, date: new Date().toISOString() };
+        this.store.addToHistory(item);
     }
 
-    private async processExams(feed: Feed, start: Date, end: Date) {
+    private async processExams(start: Date, end: Date) {
         try {
             const exams = await this.untisManager.getExams(start, end);
             for (const exam of exams) {
@@ -156,15 +183,18 @@ export class FeedGenerator {
 
                 if (!this.store.isSeen(uid)) {
                     const examDate = UntisManager.convertDate(exam.examDate);
+                    const formattedDate = this.formatDate(examDate);
                     // Note: exam.teachers and exam.rooms are arrays of strings, not objects
                     const description = `Subject: ${exam.subject} | Teacher: ${exam.teachers.join(', ')} | Room: ${exam.rooms.join(', ')}`;
-                    feed.addItem({
-                        title: `📝 EXAM: ${exam.name} on ${examDate.toLocaleDateString()}`,
+                    
+                    const item: FeedItem = {
+                        title: `📝 EXAM: ${exam.name} on ${formattedDate}`,
                         id: uid,
                         link: '',
                         description,
-                        date: new Date(),
-                    });
+                        date: new Date().toISOString(),
+                    };
+                    this.store.addToHistory(item);
                     this.store.markSeen(uid);
                 }
             }
@@ -173,22 +203,25 @@ export class FeedGenerator {
         }
     }
 
-    private async processAbsences(feed: Feed, start: Date, end: Date) {
+    private async processAbsences(start: Date, end: Date) {
         try {
             const absenceData = await this.untisManager.getAbsences(start, end);
             for (const absence of absenceData.absences) {
                 const uid = generateHash({ type: 'absence', id: absence.id, lastUpdate: absence.lastUpdate });
                 if (!this.store.isSeen(uid)) {
                     const absenceDate = UntisManager.convertDate(absence.startDate);
+                    const formattedDate = this.formatDate(absenceDate);
                     let title = `Absence Recorded: ${absence.reason}`;
                     if (absence.isExcused) title = `✅ Absence Excused: ${absence.reason}`;
 
-                    let description = `Date: ${absenceDate.toLocaleDateString()} | Status: ${absence.excuseStatus} | Created by: ${absence.createdUser}`;
+                    let description = `Date: ${formattedDate} | Status: ${absence.excuseStatus} | Created by: ${absence.createdUser}`;
                     if (absence.isExcused && absence.excuse) {
-                        description += ` | Excused by: ${absence.excuse.username} on ${UntisManager.convertDate(absence.excuse.excuseDate).toLocaleDateString()}`;
+                        const excuseDate = UntisManager.convertDate(absence.excuse.excuseDate);
+                        description += ` | Excused by: ${absence.excuse.username} on ${this.formatDate(excuseDate)}`;
                     }
 
-                    feed.addItem({ title, id: uid, link: '', description, date: new Date() });
+                    const item: FeedItem = { title, id: uid, link: '', description, date: new Date().toISOString() };
+                    this.store.addToHistory(item);
                     this.store.markSeen(uid);
                 }
             }
@@ -197,20 +230,21 @@ export class FeedGenerator {
         }
     }
 
-    private async processMessages(feed: Feed, date: Date) {
+    private async processMessages(date: Date) {
         try {
             const news = await this.untisManager.getNews(date);
             if (news && news.messagesOfDay) {
                 for (const message of news.messagesOfDay) {
                     const uid = generateHash({ type: 'message', id: message.id });
                     if (!this.store.isSeen(uid)) {
-                        feed.addItem({
+                        const item: FeedItem = {
                             title: `📢 NEWS: ${message.subject}`,
                             id: uid,
                             link: '',
                             description: message.text,
-                            date: new Date(),
-                        });
+                            date: new Date().toISOString(),
+                        };
+                        this.store.addToHistory(item);
                         this.store.markSeen(uid);
                     }
                 }

@@ -1,5 +1,14 @@
+export interface FeedItem {
+    title: string;
+    id: string;
+    link: string;
+    description: string;
+    date: string; // ISO string
+}
+
 export interface State {
     seen: string[];
+    history: FeedItem[];
 }
 
 export interface PeriodEntry {
