@@ -161,6 +161,27 @@ export class FeedGenerator {
             } else {
                 title = `Lesson Updated: ${entry.subjects.join(', ')} on ${formattedDate}`;
                 description = `A lesson at ${entry.startTime} has been updated.`;
+
+                // Detailed diff description
+                if (change.old && change.new) {
+                    const diffs: string[] = [];
+                    if (JSON.stringify(change.old.teachers) !== JSON.stringify(change.new.teachers)) {
+                        diffs.push(`Teacher: ${change.old.teachers.join(', ')} ➔ ${change.new.teachers.join(', ')}`);
+                    }
+                    if (JSON.stringify(change.old.rooms) !== JSON.stringify(change.new.rooms)) {
+                        diffs.push(`Room: ${change.old.rooms.join(', ')} ➔ ${change.new.rooms.join(', ')}`);
+                    }
+                    if (JSON.stringify(change.old.subjects) !== JSON.stringify(change.new.subjects)) {
+                        diffs.push(`Subject: ${change.old.subjects.join(', ')} ➔ ${change.new.subjects.join(', ')}`);
+                    }
+                    if (change.old.startTime !== change.new.startTime || change.old.endTime !== change.new.endTime) {
+                        diffs.push(`Time: ${change.old.startTime}-${change.old.endTime} ➔ ${change.new.startTime}-${change.new.endTime}`);
+                    }
+                    
+                    if (diffs.length > 0) {
+                        description += ` Changes: ${diffs.join(' | ')}`;
+                    }
+                }
             }
         } else if (change.type === 'added') {
             title = `New Lesson: ${entry.subjects.join(', ')} on ${formattedDate}`;
