@@ -56,7 +56,10 @@ export class UntisManager {
     }
 
     static convertDate(date: number | string): Date {
-        return WebUntis.convertUntisDate(String(date));
+        const d = WebUntis.convertUntisDate(String(date));
+        // Force the date to be interpreted as noon to avoid midnight rollover issues due to timezone offsets
+        d.setHours(12, 0, 0, 0);
+        return d;
     }
 
     static convertTime(time: number): Date {
